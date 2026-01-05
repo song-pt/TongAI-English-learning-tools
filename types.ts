@@ -42,6 +42,7 @@ export type AppTheme = 'duolingo' | 'aero';
 
 export interface AppSettings {
   baseUrl: string;
+  customApiKey: string;
   modelName: string;
   allowInflection: boolean;
   theme: AppTheme;

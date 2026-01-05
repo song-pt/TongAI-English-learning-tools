@@ -1,9 +1,9 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { AppMode, WordPair, ContextQuestion, AppSettings, AppTheme, GrammarPracticeData, GrammarSubMode } from './types';
+import React, { useState, useEffect } from 'react';
+import { AppMode, WordPair, ContextQuestion, AppSettings, GrammarPracticeData, GrammarSubMode } from './types';
 import { fetchWordPairs, fetchContextQuestions, fetchGrammarData, fetchExplanationForError } from './geminiService';
 import Button from './components/Button';
-import { Settings as SettingsIcon, RotateCcw, CheckCircle2, XCircle, Code, Info, Monitor, Layout, Sliders, Target, BookOpen, ChevronRight, HelpCircle, PenTool, ListChecks, Hash, Sparkles, Loader2 } from 'lucide-react';
+import { Settings as SettingsIcon, RotateCcw, CheckCircle2, XCircle, Code, Monitor, Layout, Sliders, Target, BookOpen, HelpCircle, PenTool, ListChecks, Hash, Sparkles, Loader2, Key } from 'lucide-react';
 
 const FormattedText: React.FC<{ text: string }> = ({ text }) => {
   const parts = text.split(/(\*\*.*?\*\*)/g);
@@ -30,11 +30,13 @@ const App: React.FC = () => {
   const [contextQuestions, setContextQuestions] = useState<ContextQuestion[]>([]);
   const [grammarData, setGrammarData] = useState<GrammarPracticeData | null>(null);
   const [isDev, setIsDev] = useState(false);
+  const [apiKeyMissing, setApiKeyMissing] = useState(false);
   
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('lingo_settings');
     return saved ? JSON.parse(saved) : {
       baseUrl: 'https://generativelanguage.googleapis.com',
+      customApiKey: '',
       modelName: 'gemini-3-flash-preview',
       allowInflection: false,
       theme: 'duolingo',
@@ -45,26 +47,62 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
-    // @ts-ignore
-    if (window.aistudio) {
-      setIsDev(true);
-    }
-  }, []);
+    const initApp = async () => {
+      // @ts-ignore
+      if (window.aistudio) {
+        setIsDev(true);
+      }
+      
+      // If no custom key AND no env key, check if we need to show a gate
+      if (!settings.customApiKey && !process.env.API_KEY) {
+        // @ts-ignore
+        if (window.aistudio) {
+          // @ts-ignore
+          const hasKey = await window.aistudio.hasSelectedApiKey();
+          if (!hasKey) setApiKeyMissing(true);
+        } else {
+          setApiKeyMissing(true);
+        }
+      }
+    };
+    initApp();
+  }, [settings.customApiKey]);
 
   useEffect(() => {
     localStorage.setItem('lingo_settings', JSON.stringify(settings));
   }, [settings]);
 
+  const handleOpenKeySelector = async () => {
+    // @ts-ignore
+    if (window.aistudio) {
+      // @ts-ignore
+      await window.aistudio.openSelectKey();
+      setApiKeyMissing(false);
+    } else {
+      setMode('settings');
+      setApiKeyMissing(false);
+    }
+  };
+
+  const handleApiError = async (error: any) => {
+    const msg = error.message || "";
+    if (msg.includes("Requested entity was not found.") || msg.includes("API_KEY_INVALID") || msg.includes("401") || msg.includes("API Key 未配置")) {
+      setApiKeyMissing(true);
+      return;
+    }
+    alert(`请求失败: ${msg}`);
+  };
+
   const startMatching = async () => {
     if (!userWords.trim()) return;
     setIsLoading(true);
     try {
-      const pairs = await fetchWordPairs(userWords, settings.modelName);
+      const pairs = await fetchWordPairs(userWords, settings);
       const limitedPairs = pairs.slice(0, settings.wordPracticeCount);
       setWordPairs(limitedPairs);
       setMode('matching');
     } catch (error: any) {
-      alert(`获取单词失败: ${error.message}`);
+      await handleApiError(error);
     } finally {
       setIsLoading(false);
     }
@@ -74,11 +112,11 @@ const App: React.FC = () => {
     if (!userWords.trim()) return;
     setIsLoading(true);
     try {
-      const questions = await fetchContextQuestions(userWords, settings.allowInflection, settings.wordPracticeCount, settings.modelName);
+      const questions = await fetchContextQuestions(userWords, settings.allowInflection, settings.wordPracticeCount, settings);
       setContextQuestions(questions);
       setMode('context');
     } catch (error: any) {
-      alert(`生成题目失败: ${error.message}`);
+      await handleApiError(error);
     } finally {
       setIsLoading(false);
     }
@@ -89,11 +127,11 @@ const App: React.FC = () => {
     setGrammarSubMode(targetMode);
     setIsLoading(true);
     try {
-      const data = await fetchGrammarData(grammarPoint, grade, settings.grammarPracticeCount, settings.modelName);
+      const data = await fetchGrammarData(grammarPoint, grade, settings.grammarPracticeCount, settings);
       setGrammarData(data);
       setMode('grammar_practice');
     } catch (error: any) {
-      alert(`生成语法练习失败: ${error.message}`);
+      await handleApiError(error);
     } finally {
       setIsLoading(false);
     }
@@ -111,6 +149,36 @@ const App: React.FC = () => {
         <div className="fixed inset-0 pointer-events-none overflow-hidden">
           <div className="absolute -top-20 -left-20 w-96 h-96 bg-white/20 rounded-full blur-3xl animate-pulse" />
           <div className="absolute top-1/4 -right-20 w-80 h-80 bg-blue-300/30 rounded-full blur-3xl" />
+        </div>
+      )}
+
+      {/* API Key Gate Overlay */}
+      {apiKeyMissing && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+          <div className={`max-w-md w-full p-8 rounded-3xl shadow-2xl flex flex-col items-center text-center gap-6 animate-in zoom-in duration-300 ${
+            isAero ? "bg-white/80 border border-white/50 text-black" : "bg-white border-4 border-blue-500"
+          }`}>
+            <div className="w-20 h-20 rounded-2xl bg-blue-100 flex items-center justify-center text-blue-600">
+              <Key size={40} />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-2xl font-black">需要 API Key</h2>
+              <p className="opacity-70 font-bold">
+                请先在设置中填写您的 API Key。
+                {isDev && " 或者，点击下方按钮选择内置 API Key。"}
+              </p>
+            </div>
+            <div className="flex flex-col gap-3 w-full">
+               <Button onClick={() => { setMode('settings'); setApiKeyMissing(false); }} fullWidth theme={settings.theme} aeroOpacity={settings.aeroOpacity} className="h-14 text-lg">
+                去设置填写 API Key
+              </Button>
+               {isDev && (
+                <Button onClick={handleOpenKeySelector} variant="ghost" fullWidth theme={settings.theme} aeroOpacity={settings.aeroOpacity}>
+                  使用内置 Key
+                </Button>
+               )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -199,6 +267,7 @@ const App: React.FC = () => {
               setSettings={setSettings} 
               onClose={() => setMode('input')} 
               isDev={isDev}
+              onForceSelectKey={handleOpenKeySelector}
             />
           )}
         </div>
@@ -258,6 +327,115 @@ const InputSection: React.FC<{
         <Button onClick={onGoGrammar} variant="ghost" fullWidth theme={settings.theme} aeroOpacity={settings.aeroOpacity} className="border-2 border-blue-400 text-blue-600 hover:bg-blue-50">
           <BookOpen size={20} /> 进入语法练习模式
         </Button>
+      </div>
+    </div>
+  );
+};
+
+const MatchingSection: React.FC<{
+  pairs: WordPair[],
+  onReset: () => void,
+  settings: AppSettings
+}> = ({ pairs, onReset, settings }) => {
+  const [selectedEn, setSelectedEn] = useState<string | null>(null);
+  const [selectedCn, setSelectedCn] = useState<string | null>(null);
+  const [matches, setMatches] = useState<string[]>([]);
+  const [wrongMatch, setWrongMatch] = useState<{ en: string, cn: string } | null>(null);
+
+  const isAero = settings.theme === 'aero';
+
+  const [shuffledEn, setShuffledEn] = useState<WordPair[]>([]);
+  const [shuffledCn, setShuffledCn] = useState<WordPair[]>([]);
+
+  useEffect(() => {
+    setShuffledEn([...pairs].sort(() => Math.random() - 0.5));
+    setShuffledCn([...pairs].sort(() => Math.random() - 0.5));
+  }, [pairs]);
+
+  useEffect(() => {
+    if (selectedEn && selectedCn) {
+      if (selectedEn === selectedCn) {
+        setMatches(prev => [...prev, selectedEn]);
+        setSelectedEn(null);
+        setSelectedCn(null);
+        if (matches.length + 1 === pairs.length) {
+          setTimeout(() => {
+             alert("全对了！你太棒了！");
+             onReset();
+          }, 500);
+        }
+      } else {
+        setWrongMatch({ en: selectedEn, cn: selectedCn });
+        setTimeout(() => {
+          setWrongMatch(null);
+          setSelectedEn(null);
+          setSelectedCn(null);
+        }, 1000);
+      }
+    }
+  }, [selectedEn, selectedCn, pairs, matches.length, onReset]);
+
+  return (
+    <div className={`p-8 space-y-8 animate-in fade-in duration-500 ${isAero ? "text-black" : "bg-white rounded-3xl"}`}>
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-black opacity-70">单词连线挑战</h2>
+        <div className="text-sm font-bold">{matches.length} / {pairs.length} 已完成</div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-8">
+        <div className="flex flex-col gap-3">
+          {shuffledEn.map(p => {
+            const isMatched = matches.includes(p.id);
+            const isSelected = selectedEn === p.id;
+            const isWrong = wrongMatch?.en === p.id;
+
+            return (
+              <button
+                key={p.id}
+                disabled={isMatched || !!wrongMatch}
+                onClick={() => setSelectedEn(p.id)}
+                className={`p-4 rounded-2xl border-2 font-bold transition-all ${
+                  isMatched ? "opacity-0 pointer-events-none" :
+                  isWrong ? "bg-red-500/20 border-red-500 scale-95" :
+                  isSelected ? "bg-blue-500 text-white border-blue-600 scale-105" :
+                  (isAero ? "bg-white/50 border-white/30 hover:bg-white/70" : "bg-white border-gray-100 hover:border-blue-400")
+                }`}
+              >
+                {p.en}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          {shuffledCn.map(p => {
+            const isMatched = matches.includes(p.id);
+            const isSelected = selectedCn === p.id;
+            const isWrong = wrongMatch?.cn === p.id;
+
+            return (
+              <button
+                key={p.id}
+                disabled={isMatched || !!wrongMatch}
+                onClick={() => setSelectedCn(p.id)}
+                className={`p-4 rounded-2xl border-2 font-bold transition-all ${
+                  isMatched ? "opacity-0 pointer-events-none" :
+                  isWrong ? "bg-red-500/20 border-red-500 scale-95" :
+                  isSelected ? "bg-blue-500 text-white border-blue-600 scale-105" :
+                  (isAero ? "bg-white/50 border-white/30 hover:bg-white/70" : "bg-white border-gray-100 hover:border-blue-400")
+                }`}
+              >
+                {p.cn}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex justify-center pt-4">
+        <button onClick={onReset} className="font-bold text-gray-400 hover:text-gray-600 flex items-center gap-2">
+          <RotateCcw size={18} /> 返回
+        </button>
       </div>
     </div>
   );
@@ -414,7 +592,7 @@ const GrammarPracticeSection: React.FC<{
         correct = data.choiceQuestions[choiceIndex].answer;
         wrong = selectedOption || '未选择';
       }
-      const explanation = await fetchExplanationForError(sentence, correct, wrong, settings.modelName);
+      const explanation = await fetchExplanationForError(sentence, correct, wrong, settings);
       setAiExplanation(explanation);
     } catch (e) {
       setAiExplanation('获取分析失败，请检查网络连接。');
@@ -616,177 +794,6 @@ const GrammarPracticeSection: React.FC<{
   );
 };
 
-const MatchingSection: React.FC<{ pairs: WordPair[], onReset: () => void, settings: AppSettings }> = ({ pairs, onReset, settings }) => {
-  const [leftCol, setLeftCol] = useState<WordPair[]>([]);
-  const [rightCol, setRightCol] = useState<WordPair[]>([]);
-  const [selectedLeft, setSelectedLeft] = useState<string | null>(null);
-  const [selectedRight, setSelectedRight] = useState<string | null>(null);
-  const [matchedIds, setMatchedIds] = useState<Set<string>>(new Set());
-  const [feedback, setFeedback] = useState<{ id: string, type: 'correct' | 'error' } | null>(null);
-  const [errorInfo, setErrorInfo] = useState<string | null>(null);
-  const isAero = settings.theme === 'aero';
-
-  const shuffle = useCallback(() => {
-    setLeftCol([...pairs].sort(() => Math.random() - 0.5));
-    setRightCol([...pairs].sort(() => Math.random() - 0.5));
-    setMatchedIds(new Set());
-    setSelectedLeft(null);
-    setSelectedRight(null);
-  }, [pairs]);
-
-  useEffect(() => {
-    shuffle();
-  }, [shuffle]);
-
-  const handleLeftClick = (p: WordPair) => {
-    if (matchedIds.has(p.id) || feedback) return;
-    setSelectedLeft(p.id);
-    if (selectedRight) checkMatch(p.id, selectedRight);
-  };
-
-  const handleRightClick = (p: WordPair) => {
-    if (matchedIds.has(p.id) || feedback) return;
-    setSelectedRight(p.id);
-    if (selectedLeft) checkMatch(selectedLeft, p.id);
-  };
-
-  const checkMatch = (leftId: string, rightId: string) => {
-    if (leftId === rightId) {
-      setFeedback({ id: leftId, type: 'correct' });
-      setTimeout(() => {
-        setMatchedIds(prev => new Set(prev).add(leftId));
-        setFeedback(null);
-        setSelectedLeft(null);
-        setSelectedRight(null);
-      }, 600);
-    } else {
-      setFeedback({ id: leftId, type: 'error' });
-      const correctWord = pairs.find(p => p.id === leftId);
-      setErrorInfo(`答错了！ ${correctWord?.en} 的意思是 ${correctWord?.cn}`);
-    }
-  };
-
-  if (matchedIds.size === pairs.length && pairs.length > 0) {
-    return (
-      <div className={`p-12 text-center flex flex-col items-center gap-6 animate-in zoom-in duration-300 ${isAero ? "" : "bg-white rounded-3xl shadow-sm"}`}>
-        <div className={`w-24 h-24 rounded-full flex items-center justify-center text-white shadow-lg transition-all ${isAero ? "bg-white/70 backdrop-blur-md border border-white/50 text-black" : "bg-[#58cc02]"}`}>
-          <CheckCircle2 size={64} />
-        </div>
-        <h2 className={`text-3xl font-black ${isAero ? "text-black drop-shadow-md" : "text-gray-800"}`}>完美通关！</h2>
-        <p className={`text-lg ${isAero ? "text-black/80" : "text-gray-500"}`}>你已经成功匹配了所有单词。</p>
-        <div className="flex gap-4 w-full">
-          <Button onClick={shuffle} fullWidth theme={settings.theme} aeroOpacity={settings.aeroOpacity}>再来一局</Button>
-          <Button variant="ghost" onClick={onReset} fullWidth theme={settings.theme} aeroOpacity={settings.aeroOpacity}>退出</Button>
-        </div>
-      </div>
-    );
-  }
-
-  const opacityValue = settings.aeroOpacity / 100;
-
-  return (
-    <div className={`p-6 space-y-6`}>
-      <div className={`flex justify-between items-center p-4 rounded-2xl border mb-4 transition-all ${
-        isAero ? "bg-white/70 backdrop-blur-md border-white/30 text-black" : "bg-white border-gray-100 text-gray-600"
-      }`}>
-        <h2 className="text-lg font-bold">词义配对</h2>
-        <span className={`text-sm font-bold ${isAero ? "text-black/60" : "text-[#1cb0f6]"}`}>{matchedIds.size} / {pairs.length}</span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 md:gap-8">
-        <div className="space-y-3">
-          {leftCol.map(p => {
-            const isMatched = matchedIds.has(p.id);
-            const isSelected = selectedLeft === p.id;
-            const isCurrentFeedback = feedback?.id === p.id;
-            
-            let btnClass = isAero ? "border-white/30 text-black" : "bg-white border-gray-200 text-gray-700";
-            let dynamicStyle: any = isAero ? { backgroundColor: `rgba(255, 255, 255, ${opacityValue})` } : {};
-            
-            if (isMatched) {
-                btnClass = isAero ? "border-white/10 text-black/40" : "bg-gray-100 border-gray-200 text-gray-300 opacity-50";
-                if (isAero) dynamicStyle = { backgroundColor: `rgba(255, 255, 255, ${opacityValue * 0.4})` };
-            } else if (isSelected) {
-                btnClass = isAero ? "border-blue-200 text-black shadow-inner" : "bg-[#ddf4ff] border-[#1cb0f6] text-[#1cb0f6]";
-                if (isAero) dynamicStyle = { backgroundColor: `rgba(59, 130, 246, 0.5)` };
-            }
-            
-            if (isCurrentFeedback) {
-              if (feedback.type === 'correct') {
-                btnClass = isAero ? "border-green-200 text-black" : "bg-[#e5ffcc] border-[#58cc02] text-[#58cc02]";
-                if (isAero) dynamicStyle = { backgroundColor: `rgba(34, 197, 94, 0.7)` };
-              } else {
-                btnClass = isAero ? "border-red-200 text-black" : "bg-[#ffdfdf] border-[#ff4b4b] text-[#ff4b4b]";
-                if (isAero) dynamicStyle = { backgroundColor: `rgba(239, 68, 68, 0.7)` };
-              }
-            }
-
-            return (
-              <button 
-                key={p.id} 
-                onClick={() => handleLeftClick(p)} 
-                disabled={isMatched} 
-                style={dynamicStyle}
-                className={`w-full p-4 rounded-2xl border-b-4 text-center font-bold text-lg transition-all ${btnClass} ${isAero ? "backdrop-blur-sm" : ""}`}
-              >
-                {p.en}
-              </button>
-            );
-          })}
-        </div>
-        <div className="space-y-3">
-          {rightCol.map(p => {
-            const isMatched = matchedIds.has(p.id);
-            const isSelected = selectedRight === p.id;
-            const isCorrectPartner = feedback?.type === 'correct' && feedback.id === p.id;
-            
-            let btnClass = isAero ? "border-white/30 text-black" : "bg-white border-gray-200 text-gray-700";
-            let dynamicStyle: any = isAero ? { backgroundColor: `rgba(255, 255, 255, ${opacityValue})` } : {};
-
-            if (isMatched) {
-                btnClass = isAero ? "border-white/10 text-black/40" : "bg-gray-100 border-gray-200 text-gray-300 opacity-50";
-                if (isAero) dynamicStyle = { backgroundColor: `rgba(255, 255, 255, ${opacityValue * 0.4})` };
-            } else if (isSelected) {
-                btnClass = isAero ? "border-blue-200 text-black shadow-inner" : "bg-[#ddf4ff] border-[#1cb0f6] text-[#1cb0f6]";
-                if (isAero) dynamicStyle = { backgroundColor: `rgba(59, 130, 246, 0.5)` };
-            }
-            
-            if (isCorrectPartner) {
-                btnClass = isAero ? "border-green-200 text-black" : "bg-[#e5ffcc] border-[#58cc02] text-[#58cc02]";
-                if (isAero) dynamicStyle = { backgroundColor: `rgba(34, 197, 94, 0.7)` };
-            }
-
-            return (
-              <button 
-                key={p.id} 
-                onClick={() => handleRightClick(p)} 
-                disabled={isMatched} 
-                style={dynamicStyle}
-                className={`w-full p-4 rounded-2xl border-b-4 text-center font-bold text-lg transition-all ${btnClass} ${isAero ? "backdrop-blur-sm" : ""}`}
-              >
-                {p.cn}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {errorInfo && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className={`p-8 rounded-3xl max-w-sm w-full text-center space-y-6 animate-in fade-in zoom-in duration-200 transition-all ${
-            isAero ? "bg-white/70 backdrop-blur-2xl border border-white/40 shadow-2xl text-black" : "bg-white shadow-xl"
-          }`}>
-            <XCircle className={`mx-auto ${isAero ? "text-red-600" : "text-[#ff4b4b]"}`} size={64} />
-            <h3 className={`text-2xl font-black ${isAero ? "text-black" : "text-gray-800"}`}>哎呀！</h3>
-            <p className={`${isAero ? "text-black/90" : "text-gray-600"} text-lg font-bold`}>{errorInfo}</p>
-            <Button onClick={() => { setErrorInfo(null); setFeedback(null); setSelectedLeft(null); setSelectedRight(null); }} variant="danger" fullWidth theme={settings.theme} aeroOpacity={settings.aeroOpacity}>继续练习</Button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
 const ContextSection: React.FC<{ 
   questions: ContextQuestion[], 
   onRefresh: () => void, 
@@ -838,7 +845,7 @@ const ContextSection: React.FC<{
   const handleAskAI = async () => {
     setIsExplaining(true);
     try {
-      const explanation = await fetchExplanationForError(q.sentence, q.answer, userInput, settings.modelName);
+      const explanation = await fetchExplanationForError(q.sentence, q.answer, userInput, settings);
       setAiExplanation(explanation);
     } catch (e) {
       setAiExplanation('获取分析失败，请检查网络连接。');
@@ -945,7 +952,7 @@ const ContextSection: React.FC<{
             </div>
 
             {status === 'incorrect' && !aiExplanation && (
-              <Button variant="secondary" fullWidth onClick={handleAskAI} disabled={isExplaining} theme={settings.theme} aeroOpacity={settings.aeroOpacity} className="text-white">
+              <Button variant="secondary" fullWidth theme={settings.theme} aeroOpacity={settings.aeroOpacity} className="text-white" onClick={handleAskAI} disabled={isExplaining}>
                 {isExplaining ? <Loader2 className="animate-spin" /> : <Sparkles size={18} />} 问 AI 为什么错了？
               </Button>
             )}
@@ -976,7 +983,7 @@ const ContextSection: React.FC<{
   );
 };
 
-const SettingsSection: React.FC<{ settings: AppSettings, setSettings: React.Dispatch<React.SetStateAction<AppSettings>>, onClose: () => void, isDev: boolean }> = ({ settings, setSettings, onClose, isDev }) => {
+const SettingsSection: React.FC<{ settings: AppSettings, setSettings: React.Dispatch<React.SetStateAction<AppSettings>>, onClose: () => void, isDev: boolean, onForceSelectKey: () => void }> = ({ settings, setSettings, onClose, isDev, onForceSelectKey }) => {
   const isAero = settings.theme === 'aero';
   return (
     <div className={`p-8 space-y-6 animate-in fade-in zoom-in duration-200 transition-all ${isAero ? "text-black" : "bg-white rounded-3xl"}`}>
@@ -986,6 +993,45 @@ const SettingsSection: React.FC<{ settings: AppSettings, setSettings: React.Disp
       </div>
 
       <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+        <div className="space-y-4">
+          <div>
+            <label className={`block text-sm font-bold mb-2 uppercase tracking-wide ${isAero ? "text-black/60" : "text-gray-500"}`}>API Key</label>
+            <input 
+              type="password" 
+              className={`w-full p-3 rounded-xl border-2 focus:outline-none font-bold transition-all ${
+                isAero ? "bg-white/70 border-white/30 text-black placeholder-black/30" : "bg-white border-gray-100 text-gray-800"
+              }`} 
+              value={settings.customApiKey} 
+              onChange={(e) => setSettings(s => ({ ...s, customApiKey: e.target.value }))}
+              placeholder="填写您的 Gemini 或 OpenAI (sk-...) Key"
+            />
+          </div>
+
+          <div>
+            <label className={`block text-sm font-bold mb-2 uppercase tracking-wide ${isAero ? "text-black/60" : "text-gray-500"}`}>接口基准地址 (Base URL)</label>
+            <input 
+              type="text" 
+              className={`w-full p-3 rounded-xl border-2 focus:outline-none font-bold transition-all ${
+                isAero ? "bg-white/70 border-white/30 text-black placeholder-black/30" : "bg-white border-gray-100 text-gray-800"
+              }`} 
+              value={settings.baseUrl} 
+              onChange={(e) => setSettings(s => ({ ...s, baseUrl: e.target.value }))}
+              placeholder="OpenAI 兼容模式可选"
+            />
+          </div>
+
+          {isDev && (
+            <div className="p-4 rounded-2xl bg-blue-50 border-2 border-blue-100 flex flex-col gap-3">
+              <div className="flex items-center gap-2 font-black text-blue-700 uppercase text-xs">
+                <Sparkles size={14} /> AI Studio 环境
+              </div>
+              <Button onClick={onForceSelectKey} variant="secondary" fullWidth theme={settings.theme} aeroOpacity={settings.aeroOpacity} className="text-white text-xs py-2">
+                重新选择内置 API Key
+              </Button>
+            </div>
+          )}
+        </div>
+
         <div>
           <label className={`block text-sm font-bold mb-2 uppercase tracking-wide ${isAero ? "text-black/60" : "text-gray-500"}`}>界面主题风格</label>
           <div className="grid grid-cols-2 gap-3">
@@ -1063,7 +1109,7 @@ const SettingsSection: React.FC<{ settings: AppSettings, setSettings: React.Disp
 
         <div>
           <label className={`block text-sm font-bold mb-2 uppercase tracking-wide ${isAero ? "text-black/60" : "text-gray-500"}`}>模型名称</label>
-          {isDev ? (
+          {isDev && !settings.customApiKey ? (
             <select className={`w-full p-3 rounded-xl border-2 focus:outline-none font-bold transition-all ${
               isAero ? "bg-white/70 border-white/30 text-black" : "bg-white border-gray-100 text-gray-800"
             }`} value={settings.modelName} onChange={(e) => setSettings(s => ({ ...s, modelName: e.target.value }))}>
@@ -1078,28 +1124,9 @@ const SettingsSection: React.FC<{ settings: AppSettings, setSettings: React.Disp
               }`} 
               value={settings.modelName} 
               onChange={(e) => setSettings(s => ({ ...s, modelName: e.target.value }))}
-              placeholder="输入模型名称..."
+              placeholder="输入模型名称 (如 gpt-4o)..."
             />
           )}
-        </div>
-
-        <div>
-          <label className={`block text-sm font-bold mb-2 uppercase tracking-wide ${isAero ? "text-black/60" : "text-gray-500"}`}>接口基准地址 (Base URL)</label>
-          <input 
-            type="text" 
-            className={`w-full p-3 rounded-xl border-2 focus:outline-none font-bold transition-all ${
-              isAero ? "bg-white/70 border-white/40 text-black placeholder-black/30" : "bg-white border-gray-100 text-gray-800"
-            }`} 
-            value={settings.baseUrl} 
-            onChange={(e) => setSettings(s => ({ ...s, baseUrl: e.target.value }))} 
-          />
-        </div>
-
-        <div className={`p-4 rounded-2xl flex gap-3 border transition-all ${
-          isAero ? "bg-blue-500/20 border-white/30 text-black font-bold" : "bg-blue-50 border-blue-100 text-blue-700"
-        }`}>
-          <Info className="shrink-0" size={20} />
-          <p className="text-xs leading-relaxed">设置将被自动保存在浏览器中。API Key 由环境注入。</p>
         </div>
 
         <div className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
